@@ -4,6 +4,8 @@ import { useForm } from 'react-hook-form';
 import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import axios from 'axios';
+import popSound from '@/assets/sounds/pop.mp3';
+import notificationSound from '@/assets/sounds/notification.mp3';
 
 type FormData = {
    prompt: string;
@@ -17,6 +19,12 @@ type Message = {
    role: 'user' | 'assistant';
    content: string;
 };
+
+const pop: HTMLAudioElement = new Audio(popSound);
+const notification: HTMLAudioElement = new Audio(notificationSound);
+
+pop.volume = 0.5;
+notification.volume = 0.5;
 
 const ChatBot = () => {
    const { register, handleSubmit, reset, formState } = useForm<FormData>();
@@ -35,6 +43,7 @@ const ChatBot = () => {
          setMessage((prev) => [...prev, { role: 'user', content: prompt }]);
          setBotTyping(true);
          setError('');
+         pop.play();
          reset({ prompt: '' });
          const { data } = await axios.post<ResponseData>('/api/chat', {
             prompt,
@@ -44,6 +53,7 @@ const ChatBot = () => {
             ...prev,
             { role: 'assistant', content: data.message },
          ]);
+         notification.play();
       } catch (error) {
          console.error(error);
          setError('Something went wrong..!');
@@ -59,7 +69,7 @@ const ChatBot = () => {
                <div
                   key={index}
                   ref={index === message.length - 1 ? lastMessageRef : null}
-                  className={`px-3 py-2 rounded-3xl 
+                  className={`px-3 py-2 rounded-3xl max-w-md
                     ${item.role === 'user' ? 'bg-blue-500 text-white self-end' : 'bg-gray-200 text-black self-start'}`}
                >
                   <ReactMarkdown>{item.content}</ReactMarkdown>
