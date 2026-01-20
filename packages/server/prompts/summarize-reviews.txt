@@ -1,0 +1,3 @@
+summarize the following customer reviews 
+into a short paragraph highlighting key themes, both positive and negative {{reviews}} ,
+note the max output token is 500 so the response should be according to it

@@ -1,0 +1,49 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client"
+  output = "../generated/prisma"
+	engineType = "client"
+	runtime = "bun"
+}
+
+datasource db {
+  provider = "postgresql"
+  
+  
+}
+
+model Product {
+  @@map("products")
+  id          Int      @id @default(autoincrement())
+  name        String   @db.VarChar(255)
+  description String?  @db.Text
+  price       Float
+  Review      Review[]
+  Summary     Summary?
+}
+
+model Review {
+  @@map("reviews")
+  id        Int      @id @default(autoincrement())
+  author    String   @db.VarChar(255)
+  rating    Int      @db.SmallInt
+  content   String
+  createdAt DateTime @default(now())
+  productId Int
+  product   Product  @relation(fields: [productId], references: [id])
+}
+
+model Summary {
+  @@map("summaries")
+  id          Int      @id @default(autoincrement())
+  productId   Int      @unique
+  product     Product  @relation(fields: [productId], references: [id])
+  content     String   @db.Text
+  generatedAt DateTime @default(now())
+  expiresAt   DateTime
+}
