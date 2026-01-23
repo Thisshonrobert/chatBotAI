@@ -1,103 +1,153 @@
-import { Router } from 'express';
-import { type Request, type Response } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { prisma } from '../prisma/db';
 import { GoogleGenAI } from '@google/genai';
-import template from '../prompts/summarize-reviews.txt';
+import summarizePrompt from '../prompts/summarize-reviews.txt';
 import dayjs from 'dayjs';
+import { Ollama } from 'ollama';
 
 const router = Router();
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
-if (!GEMINI_API_KEY) {
-   throw new Error('GEMINI_API_KEY is not defined');
-}
-
-const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+const ollamaClient = new Ollama();
 
 router.get('/products/:id/reviews', async (req: Request, res: Response) => {
    const productId = Number(req.params.id);
-
    if (isNaN(productId)) {
       return res.status(400).json('Invalid productId');
    }
+   const [reviews, summary] = await Promise.all([
+      prisma.review.findMany({
+         where: { productId },
+         orderBy: { createdAt: 'desc' },
+      }),
+      prisma.summary.findFirst({
+         where: {
+            AND: [{ productId }, { expiresAt: { gt: new Date() } }],
+         },
+      }),
+   ]);
 
-   const reviews = await prisma.review.findMany({
-      where: {
-         productId: productId,
-      },
-      orderBy: {
-         createdAt: 'desc',
-      },
+   return res.status(200).json({
+      summary: summary?.content ?? null,
+      reviews,
    });
-   res.json(reviews);
+});
+
+router.get('/products/:id/', async (req: Request, res: Response) => {
+   const productId = Number(req.params.id);
+   if (isNaN(productId)) {
+      return res.status(400).json('Invalid productId');
+   }
+   try {
+      const product = await prisma.product.findUnique({
+         where: {
+            id: productId,
+         },
+      });
+
+      if (!product) {
+         return res.status(404).json({
+            error: 'product not found',
+         });
+      }
+
+      res.status(200).json({
+         product: product,
+      });
+   } catch (error) {
+      console.error(error);
+      return res.status(500).json({
+         error: 'Failed to fetch product',
+      });
+   }
 });
 
 router.post(
    '/products/:id/reviews/summarize',
    async (req: Request, res: Response) => {
       const productId = Number(req.params.id);
+
+      if (isNaN(productId)) {
+         return res.status(400).json({ error: 'Invalid productId' });
+      }
+
+      const product = await prisma.product.findUnique({
+         where: { id: productId },
+      });
+
+      if (!product) {
+         return res.status(404).json({ error: 'Product not found' });
+      }
+
       const now = new Date();
       const expires = dayjs().add(7, 'days').toDate();
 
-      if (isNaN(productId)) {
-         return res.status(400).json('Invalid productId');
-      }
-
-      const existingSummary = await prisma.summary.findUnique({
-         where: { productId: productId },
-      });
-
-      if (existingSummary && existingSummary.expiresAt > now) {
-         return existingSummary.content;
-      }
-
-      const reviews = await prisma.review.findMany({
-         where: {
-            productId: productId,
-         },
-         orderBy: {
-            createdAt: 'desc',
-         },
-         take: 10,
-      });
-
-      const joinedReviews = reviews.map((r) => r.content).join('\n\n');
-      const prompt = template.replace('{{reviews}}', joinedReviews);
-
       try {
-         const { text: summary } = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt,
-            config: {
-               temperature: 0.2,
-               maxOutputTokens: 500,
+         //  Check existing summary
+
+         const existingSummary = await prisma.summary.findFirst({
+            where: {
+               AND: [{ productId }, { expiresAt: { gt: new Date() } }],
             },
          });
-         const data = {
-            content: summary!,
-            generatedAt: now,
-            expiresAt: expires,
-            productId,
-         };
 
-         try {
-            await prisma.summary.upsert({
-               where: {
-                  productId,
-               },
-               create: data,
-               update: data,
-            });
+         if (existingSummary) {
+            return res.status(200).json({ summary: existingSummary.content });
+         }
 
-            res.json({ message: summary });
-         } catch (error) {
-            res.status(400).json({
-               error: 'error while creating/updating summary',
+         const reviews = await prisma.review.findMany({
+            where: { productId },
+            orderBy: { createdAt: 'desc' },
+            take: 10,
+         });
+
+         if (reviews.length === 0) {
+            return res.status(200).json({
+               summary: null,
+               reviews: [],
             });
          }
+
+         const joinedReviews = reviews.map((r) => r.content).join('\n\n');
+
+         const generatedSummary = await ollamaClient.chat({
+            model: 'tinyllama',
+            messages: [
+               {
+                  role: 'system',
+                  content: summarizePrompt,
+               },
+               {
+                  role: 'user',
+                  content: joinedReviews,
+               },
+            ],
+         });
+
+         const finalSummary = generatedSummary.message.content;
+
+         if (!generatedSummary) {
+            return res.status(500).json({ error: 'AI returned empty summary' });
+         }
+
+         await prisma.summary.upsert({
+            where: { productId },
+            create: {
+               content: finalSummary,
+               generatedAt: now,
+               expiresAt: expires,
+               productId,
+            },
+            update: {
+               content: finalSummary,
+               generatedAt: now,
+               expiresAt: expires,
+            },
+         });
+
+         return res.status(201).json({ summary: finalSummary });
       } catch (error) {
-         console.error(error);
-         res.status(500).json({ error: 'Generation failed' });
+         console.error('[ERROR] Summarization failed:', error);
+         return res.status(500).json({ error: 'Failed to summarize reviews' });
       }
    }
 );

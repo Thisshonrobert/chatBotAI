@@ -11,7 +11,7 @@ const app = express();
 
 app.use(express.json());
 
-app.use('/api/chatBot', chatRouter);
+app.use('/api/', chatRouter);
 app.use('/api/sum', sumRouter);
 
 app.listen(PORT, () => {
